@@ -1,0 +1,275 @@
+{
+  "name": "AI Document Intelligence Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "document-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0001",
+      "name": "Webhook — Receive Document",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $json.body.document_type }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0002",
+      "name": "Validate — Document Type Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"You are a document intelligence extraction engine. Extract all structured data from the following document text and return ONLY a valid JSON object with these fields: document_type, date, total_amount, currency, vendor_name, client_name, line_items (array), payment_terms, due_date, document_number. If a field is not found, set it to null. Document text: {{ $('Webhook — Receive Document').item.json.body.document_text }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "3c4d5e6f-0003",
+      "name": "Claude API — Extract Structured Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawContent = $input.item.json.content[0].text;\n\nlet parsed;\ntry {\n  const jsonMatch = rawContent.match(/\\{[\\s\\S]*\\}/);\n  parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n} catch (e) {\n  parsed = { parse_error: true, raw: rawContent };\n}\n\nreturn {\n  ...parsed,\n  processed_at: new Date().toISOString(),\n  source_webhook: $('Webhook — Receive Document').item.json.body.source || 'unknown',\n  pipeline_version: '1.0.0'\n};"
+      },
+      "id": "4d5e6f7g-0004",
+      "name": "Code — Parse & Enrich JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-002",
+              "leftValue": "={{ $json.parse_error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5e6f7g8h-0005",
+      "name": "Validate — Parse Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Document Extractions"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "valueInputMode": "RAW"
+        }
+      },
+      "id": "6f7g8h9i-0006",
+      "name": "Google Sheets — Save Extracted Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1440, 120]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"document_number\": \"{{ $('Code — Parse & Enrich JSON').item.json.document_number }}\",\n  \"document_type\": \"{{ $('Code — Parse & Enrich JSON').item.json.document_type }}\",\n  \"vendor\": \"{{ $('Code — Parse & Enrich JSON').item.json.vendor_name }}\",\n  \"total_amount\": \"{{ $('Code — Parse & Enrich JSON').item.json.total_amount }}\",\n  \"currency\": \"{{ $('Code — Parse & Enrich JSON').item.json.currency }}\",\n  \"processed_at\": \"{{ $('Code — Parse & Enrich JSON').item.json.processed_at }}\",\n  \"saved_to_sheets\": true\n}",
+        "options": {}
+      },
+      "id": "7g8h9i0j-0007",
+      "name": "Response — Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1680, 120]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"error\",\n  \"message\": \"Failed to parse document. Please check document_text format.\",\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "8h9i0j1k-0008",
+      "name": "Response — Parse Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"error\",\n  \"message\": \"Invalid payload. document_type field is required.\",\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "9i0j1k2l-0009",
+      "name": "Response — Validation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [720, 420]
+    }
+  ],
+  "connections": {
+    "Webhook — Receive Document": {
+      "main": [
+        [
+          {
+            "node": "Validate — Document Type Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Document Type Exists": {
+      "main": [
+        [
+          {
+            "node": "Claude API — Extract Structured Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response — Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API — Extract Structured Data": {
+      "main": [
+        [
+          {
+            "node": "Code — Parse & Enrich JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Parse & Enrich JSON": {
+      "main": [
+        [
+          {
+            "node": "Validate — Parse Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Parse Success": {
+      "main": [
+        [
+          {
+            "node": "Response — Parse Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets — Save Extracted Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets — Save Extracted Data": {
+      "main": [
+        [
+          {
+            "node": "Response — Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateId": "ai-document-intelligence-v1",
+    "description": "Receives documents via webhook, extracts structured data using Claude AI, validates output, and saves to Google Sheets automatically."
+  }
+}
